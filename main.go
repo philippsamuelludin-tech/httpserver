@@ -11,6 +11,7 @@ func main() {
     	Addr:    ":8080",
     	Handler: serverMux,
 	}
+	serverMux.Handle("/", http.FileServer(http.Dir("")))
 	err := server.ListenAndServe()
 	if err != nil {
 		log.Fatal(err)
