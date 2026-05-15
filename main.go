@@ -18,6 +18,14 @@ import (
 	"httpserver/internal/database"
 )
 
+type Chirp struct {
+		Id uuid.UUID `json:"id"`
+		CreatedAt time.Time
+		UpdatedAt time.Time
+		Body string
+		UserId uuid.UUID
+	}
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -36,18 +44,14 @@ func main() {
 
 	serverMux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 	serverMux.HandleFunc("POST /api/users", apiCfg.handlerUsers)
+	serverMux.HandleFunc("POST /api/chirps", apiCfg.handlerChirps)
 	serverMux.HandleFunc("GET /api/healthz", HandlerFunction)
-	serverMux.HandleFunc("POST /api/validate_chirp", apiCfg.handlerValidation)
 	serverMux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	serverMux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
 	server.ListenAndServe()
 }
 
-func HandlerFunction(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(200)
-	w.Write([]byte("OK"))
-}
+
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
@@ -60,31 +64,6 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 		cfg.fileserverHits.Add(1)
 		next.ServeHTTP(w, r)
 	})
-}
-
-func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf(`<html>
-  <body>
-    <h1>Welcome, Chirpy Admin</h1>
-    <p>Chirpy has been visited %d times!</p>
-  </body>
-</html>`, cfg.fileserverHits.Load())))
-}
-
-func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
-	if cfg.platform != "dev" {
-		w.WriteHeader(403)
-		return
-	}
-	err := cfg.database.DeleteUsers(r.Context())
-	if err != nil {
-		log.Printf("Error deleting database: %s", err)
-		w.WriteHeader(500)
-		return
-	}
-	w.WriteHeader(200)
 }
 
 func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request) {
@@ -119,9 +98,18 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func (cfg *apiConfig) handlerValidation(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
+		UserID uuid.UUID
+	}
+
+	type Chirp struct {
+		Id uuid.UUID
+		Created_at time.Time
+		Updated_at time.Time
+		Body string
+		User_id uuid.UUID
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -131,18 +119,6 @@ func (cfg *apiConfig) handlerValidation(w http.ResponseWriter, r *http.Request) 
 		log.Printf("Error decoding parameters: %s", err)
 		w.WriteHeader(500)
 		return
-	}
-
-	type validReturn struct {
-		Valid bool `json:"valid"`
-	}
-
-	type errorReturn struct {
-		Error string `json:"error"`
-	}
-
-	type cleanedReturn struct {
-		Body string `json:"cleaned_body"`
 	}
 
 	badWords := map[string]struct{}{
@@ -164,8 +140,43 @@ func (cfg *apiConfig) handlerValidation(w http.ResponseWriter, r *http.Request) 
 	}
 
 	params.Body = strings.Join(body, " ")
+	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+		Body:   params.Body, // the cleaned version
+		UserID: params.UserID,
+	})
 	respondWithJSON(w, 200, cleanedReturn{Body: params.Body})
 
+}
+
+func HandlerFunction(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(200)
+	w.Write([]byte("OK"))
+}
+
+func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf(`<html>
+  <body>
+    <h1>Welcome, Chirpy Admin</h1>
+    <p>Chirpy has been visited %d times!</p>
+  </body>
+</html>`, cfg.fileserverHits.Load())))
+}
+
+func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
+	if cfg.platform != "dev" {
+		w.WriteHeader(403)
+		return
+	}
+	err := cfg.database.DeleteUsers(r.Context())
+	if err != nil {
+		log.Printf("Error deleting database: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(200)
 }
 
 func respondWithJSON(w http.ResponseWriter, code int, payload any) {
