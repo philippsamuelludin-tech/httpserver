@@ -11,19 +11,19 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/joho/godotenv"
 	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 
 	"httpserver/internal/database"
 )
 
 type Chirp struct {
-		Id uuid.UUID `json:"id"`
-		CreatedAt time.Time
-		UpdatedAt time.Time
-		Body string
-		UserId uuid.UUID
+		ID uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body string `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
 	}
 
 func main() {
@@ -46,6 +46,7 @@ func main() {
 	serverMux.HandleFunc("POST /api/users", apiCfg.handlerUsers)
 	serverMux.HandleFunc("POST /api/chirps", apiCfg.handlerChirps)
 	serverMux.HandleFunc("GET /api/healthz", HandlerFunction)
+	serverMux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	serverMux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	serverMux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
 	server.ListenAndServe()
@@ -101,15 +102,7 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
-		UserID uuid.UUID
-	}
-
-	type Chirp struct {
-		Id uuid.UUID
-		Created_at time.Time
-		Updated_at time.Time
-		Body string
-		User_id uuid.UUID
+		UserID uuid.UUID `json:"user_id"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -140,11 +133,24 @@ func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params.Body = strings.Join(body, " ")
-	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+	chirp, err := cfg.database.CreateChirp(r.Context(), database.CreateChirpParams{
 		Body:   params.Body, // the cleaned version
 		UserID: params.UserID,
 	})
-	respondWithJSON(w, 200, cleanedReturn{Body: params.Body})
+
+	if err != nil {
+    log.Printf("CreateChirp error: %s", err)
+    respondWithError(w, 500, "Couldn't create chirp")
+    return
+	}
+
+	respondWithJSON(w, 201, Chirp{
+		ID: chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body: chirp.Body,
+		UserID: chirp.UserID,
+	})
 
 }
 
@@ -152,6 +158,22 @@ func HandlerFunction(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(200)
 	w.Write([]byte("OK"))
+}
+
+func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
+	chirps, err := cfg.database.GetChirps(r.Context())
+	if err != nil {
+		log.Printf("Error gettting all Chirps: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	chirpSlice := []Chirp{}
+	for _, dbChirp := range chirps {
+		// convert dbChirp to your Chirp type and append to chirpSlice
+		chirpSlice = append(chirpSlice, Chirp{ID: dbChirp.ID, CreatedAt: dbChirp.CreatedAt, UpdatedAt: dbChirp.UpdatedAt, Body: dbChirp.Body, UserID: dbChirp.UserID})
+	}
+	respondWithJSON(w, 200, chirpSlice)
 }
 
 func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
