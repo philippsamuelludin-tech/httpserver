@@ -32,18 +32,21 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email string `json:"email"`
+	Token string `json:"token"`
 }
 
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	platForm := os.Getenv("PLATFORM")
+	sec := os.Getenv("SECRET")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		fmt.Printf("%v", err)
 	}
 	dbQueries := database.New(db)
-	apiCfg := apiConfig{database: dbQueries, platform: platForm}
+	apiCfg := apiConfig{database: dbQueries, platform: platForm, secret: sec}
+	log.Printf("JWT secret loaded, length: %d", len(apiCfg.secret))
 	serverMux := http.NewServeMux()
 	server := &http.Server{
 		Addr:    ":8080",
@@ -66,6 +69,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	database       *database.Queries
 	platform       string
+	secret		   string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -117,7 +121,6 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -126,6 +129,19 @@ func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Error decoding parameters: %s", err)
 		w.WriteHeader(500)
+		return
+	}
+
+	userjwt, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting user token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+	usrID, err := auth.ValidateJWT(userjwt, cfg.secret)
+	if err != nil {
+		log.Printf("Error validating user token: %s", err)
+		w.WriteHeader(401)
 		return
 	}
 
@@ -150,7 +166,7 @@ func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request) {
 	params.Body = strings.Join(body, " ")
 	chirp, err := cfg.database.CreateChirp(r.Context(), database.CreateChirpParams{
 		Body:   params.Body, // the cleaned version
-		UserID: params.UserID,
+		UserID: usrID,
 	})
 
 	if err != nil {
@@ -173,6 +189,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Password   	string    	`json:"password"`
 		Email 		string 		`json:"email"`
+		ExpiresInSeconds *int 	`json:"expires_in_seconds"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -198,11 +215,28 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var expiration time.Duration
+	if params.ExpiresInSeconds == nil {
+		expiration = time.Hour
+	} else if *params.ExpiresInSeconds > 3600 { 
+		expiration = time.Hour
+	} else {
+		expiration = time.Duration(*params.ExpiresInSeconds * int(time.Second))
+	}
+	token, err := auth.MakeJWT(usr.ID, cfg.secret, expiration)
+	if err != nil {
+		log.Printf("Error creating Token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+
 	respondWithJSON(w, 200, User{
 		ID: usr.ID,
 		CreatedAt: usr.CreatedAt,
 		UpdatedAt: usr.UpdatedAt,
 		Email: usr.Email,
+		Token: token,
 	})
 }
 
