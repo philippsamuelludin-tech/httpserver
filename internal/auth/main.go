@@ -1,13 +1,16 @@
 package auth
 
 import (
-	"github.com/alexedwards/argon2id"
-	"time"
-	"github.com/google/uuid"
-	"github.com/golang-jwt/jwt/v5"
-	"strings"
-	"net/http"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/alexedwards/argon2id"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 func HashPassword(password string) (string, error) {
@@ -66,4 +69,13 @@ func GetBearerToken(headers http.Header) (string, error) {
 	}
 	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
 	return tokenString, nil
+}
+
+func MakeRefreshToken() (string, error) {
+	key := make([]byte, 32)
+	_, err := rand.Read(key)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(key), nil
 }

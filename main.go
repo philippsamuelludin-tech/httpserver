@@ -33,6 +33,7 @@ type User struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Email string `json:"email"`
 	Token string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 func main() {
@@ -57,6 +58,8 @@ func main() {
 	serverMux.HandleFunc("POST /api/users", apiCfg.handlerUsers)
 	serverMux.HandleFunc("POST /api/chirps", apiCfg.handlerChirps)
 	serverMux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
+	serverMux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
+	serverMux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
 	serverMux.HandleFunc("GET /api/healthz", HandlerFunction)
 	serverMux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	serverMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirpsByID)
@@ -215,18 +218,27 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var expiration time.Duration
-	if params.ExpiresInSeconds == nil {
-		expiration = time.Hour
-	} else if *params.ExpiresInSeconds > 3600 { 
-		expiration = time.Hour
-	} else {
-		expiration = time.Duration(*params.ExpiresInSeconds * int(time.Second))
-	}
-	token, err := auth.MakeJWT(usr.ID, cfg.secret, expiration)
+	
+	token, err := auth.MakeJWT(usr.ID, cfg.secret, time.Hour)
 	if err != nil {
 		log.Printf("Error creating Token: %s", err)
 		w.WriteHeader(401)
+		return
+	}
+
+	refreshToken, err := auth.MakeRefreshToken()
+	if err != nil {
+		log.Printf("Error creating Refreshtoken: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+	rfToken, err := cfg.database.InsertTokenToDatabase(r.Context(), database.InsertTokenToDatabaseParams{
+		Token: refreshToken,
+		UserID: usr.ID,
+	})
+	if err != nil {
+		log.Printf("Error inserting Refreshtoken: %s", err)
+		w.WriteHeader(500)
 		return
 	}
 
@@ -237,9 +249,56 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt: usr.UpdatedAt,
 		Email: usr.Email,
 		Token: token,
+		RefreshToken: rfToken.Token,
 	})
 }
 
+func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
+	bearerToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting Bearertoken: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	usr, err := cfg.database.GetUserFromRefreshToken(r.Context(), bearerToken)
+	if err != nil {
+		log.Printf("Error getting User: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	jwtToken, err := auth.MakeJWT(usr.ID, cfg.secret, time.Hour)
+	if err != nil {
+		log.Printf("Error creating JWT Token: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+
+	type response struct {
+		Token string `json:"token"`
+	}
+	respondWithJSON(w, 200, response{Token: jwtToken})
+}
+
+func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
+	bearerToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting Bearertoken: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	err = cfg.database.RevokeUserRefreshToken(r.Context(), bearerToken)
+	if err != nil {
+		log.Printf("Error revoking User Refresh Token: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.WriteHeader(204)
+}
 
 func HandlerFunction(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
