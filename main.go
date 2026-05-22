@@ -60,6 +60,8 @@ func main() {
 	serverMux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 	serverMux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
 	serverMux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
+	serverMux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUserData)
+	serverMux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerDeleteChirpByID)
 	serverMux.HandleFunc("GET /api/healthz", HandlerFunction)
 	serverMux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	serverMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirpsByID)
@@ -297,6 +299,108 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.WriteHeader(204)
+}
+
+func (cfg *apiConfig) handlerUpdateUserData(w http.ResponseWriter, r *http.Request) {
+	bearerToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting Bearertoken: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	usrID, err := auth.ValidateJWT(bearerToken, cfg.secret)
+	if err != nil {
+		log.Printf("Error validating BearerToken: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+
+	type parameters struct {
+		NewPassword   	string    	`json:"password"`
+		Email 		string 		`json:"email"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	hashPassword, err := auth.HashPassword(params.NewPassword)
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	newUserData, err := cfg.database.UpdateUserData(r.Context(), database.UpdateUserDataParams{usrID, hashPassword, params.Email})
+	if err != nil {
+		log.Printf("Error updating User Data: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	respondWithJSON(w, 200, User{
+		ID: newUserData.ID,
+		CreatedAt: newUserData.CreatedAt,
+		UpdatedAt: newUserData.UpdatedAt,
+		Email: newUserData.Email,
+	})
+
+}
+
+func (cfg *apiConfig) handlerDeleteChirpByID(w http.ResponseWriter, r *http.Request) {
+	bearerToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting Bearertoken: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	usrID, err := auth.ValidateJWT(bearerToken, cfg.secret)
+	if err != nil {
+		log.Printf("Error validating BearerToken: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	chirpIDStr := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		respondWithError(w, 400, "Invalid chirp ID")
+		return
+	}
+
+	chirp, err := cfg.database.GetChirpsByID(r.Context(), chirpID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			respondWithError(w, 404, "Chirp not found")
+			return
+		}
+		log.Printf("Error getting chirp: %s", err)
+		respondWithError(w, 500, "Couldn't retrieve chirp")
+		return
+	}
+
+	if chirp.UserID != usrID {
+		log.Printf("You can't delete this Chirp, since you're not the author")
+		w.WriteHeader(403)
+		return
+	}
+
+	err = cfg.database.DeleteChirpByID(r.Context(), chirp.ID)
+	if err != nil {
+		log.Printf("Error deleting Chirp: %s", err)
+		w.WriteHeader(404)
+		return
+	}
+	
 	w.WriteHeader(204)
 }
 
