@@ -34,6 +34,7 @@ type User struct {
 	Email string `json:"email"`
 	Token string `json:"token"`
 	RefreshToken string `json:"refresh_token"`
+	IsChirpyRed bool `json:"is_chirpy_red"`
 }
 
 func main() {
@@ -41,12 +42,13 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	platForm := os.Getenv("PLATFORM")
 	sec := os.Getenv("SECRET")
+	polkaKey := os.Getenv("POLKA_KEY")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		fmt.Printf("%v", err)
 	}
 	dbQueries := database.New(db)
-	apiCfg := apiConfig{database: dbQueries, platform: platForm, secret: sec}
+	apiCfg := apiConfig{database: dbQueries, platform: platForm, secret: sec, polkakey: polkaKey}
 	log.Printf("JWT secret loaded, length: %d", len(apiCfg.secret))
 	serverMux := http.NewServeMux()
 	server := &http.Server{
@@ -60,6 +62,7 @@ func main() {
 	serverMux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 	serverMux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
 	serverMux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
+	serverMux.HandleFunc("POST /api/polka/webhooks", apiCfg.handlerPolkaWebhooks)
 	serverMux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUserData)
 	serverMux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerDeleteChirpByID)
 	serverMux.HandleFunc("GET /api/healthz", HandlerFunction)
@@ -75,6 +78,7 @@ type apiConfig struct {
 	database       *database.Queries
 	platform       string
 	secret		   string
+	polkakey	   string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -112,14 +116,8 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type emailDataReturn struct {
-		Id          uuid.UUID `json:"id"`
-		CreatedDate time.Time `json:"created_at"`
-		UpdateDate  time.Time `json:"updated_at"`
-		Email       string    `json:"email"`
-	}
 
-	respondWithJSON(w, 201, emailDataReturn{Id: usr.ID, CreatedDate: usr.CreatedAt, UpdateDate: usr.UpdatedAt, Email: usr.Email})
+	respondWithJSON(w, 201, User{ID: usr.ID, CreatedAt: usr.CreatedAt, UpdatedAt: usr.UpdatedAt, Email: usr.Email, IsChirpyRed: usr.IsChirpyRed.Bool})
 
 }
 
@@ -206,7 +204,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	usr, err := cfg.database.LookUpUser(r.Context(), params.Email)
+	usr, err := cfg.database.LookUpUserByEmail(r.Context(), params.Email)
 	if err != nil {
 		log.Printf("Incorrect email or password: %s", err)
 		w.WriteHeader(401)
@@ -252,6 +250,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		Email: usr.Email,
 		Token: token,
 		RefreshToken: rfToken.Token,
+		IsChirpyRed: usr.IsChirpyRed.Bool,
 	})
 }
 
@@ -302,6 +301,63 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+func (cfg *apiConfig) handlerPolkaWebhooks(w http.ResponseWriter, r *http.Request) {
+	apikey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		log.Printf("Error getting API Key: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+	if apikey != cfg.polkakey {
+		log.Printf("API Key is wrong")
+		w.WriteHeader(401)
+		return
+	}
+	
+	type parameters struct {
+		Event   	string    	`json:"event"`
+		Data 		struct{
+			UserID	string 		`json:"user_id"`
+		}	`json:"data"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(204)
+		return
+	}
+
+	usrUUID, err := uuid.Parse(params.Data.UserID)
+	if err != nil {
+		log.Printf("Error getting user UUID: %s", err)
+		w.WriteHeader(403)
+		return
+	}
+
+	usr, err := cfg.database.LookUpUserByID(r.Context(), usrUUID)
+	if err != nil {
+		log.Printf("Couldn't find user with id: %s", params.Data.UserID)
+		w.WriteHeader(404)
+		return
+	}
+	
+	_, err = cfg.database.UpdateUserRedStatus(r.Context(), usr.ID)
+	if err != nil {
+		log.Printf("Error updating User Data: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(204)
+}
+
 func (cfg *apiConfig) handlerUpdateUserData(w http.ResponseWriter, r *http.Request) {
 	bearerToken, err := auth.GetBearerToken(r.Header)
 	if err != nil {
@@ -339,7 +395,7 @@ func (cfg *apiConfig) handlerUpdateUserData(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	newUserData, err := cfg.database.UpdateUserData(r.Context(), database.UpdateUserDataParams{usrID, hashPassword, params.Email})
+	newUserData, err := cfg.database.UpdateUserData(r.Context(), database.UpdateUserDataParams{ID: usrID, HashedPassword: hashPassword, Email: params.Email})
 	if err != nil {
 		log.Printf("Error updating User Data: %s", err)
 		w.WriteHeader(401)
@@ -351,6 +407,7 @@ func (cfg *apiConfig) handlerUpdateUserData(w http.ResponseWriter, r *http.Reque
 		CreatedAt: newUserData.CreatedAt,
 		UpdatedAt: newUserData.UpdatedAt,
 		Email: newUserData.Email,
+		IsChirpyRed: newUserData.IsChirpyRed.Bool,
 	})
 
 }
