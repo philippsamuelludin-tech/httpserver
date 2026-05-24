@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -15,8 +16,8 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 
-	"httpserver/internal/database"
 	"httpserver/internal/auth"
+	"httpserver/internal/database"
 )
 
 type Chirp struct {
@@ -28,13 +29,13 @@ type Chirp struct {
 }
 
 type User struct {
-	ID 		uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email string `json:"email"`
-	Token string `json:"token"`
-	RefreshToken string `json:"refresh_token"`
-	IsChirpyRed bool `json:"is_chirpy_red"`
+	ID           uuid.UUID `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 }
 
 func main() {
@@ -77,8 +78,8 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	database       *database.Queries
 	platform       string
-	secret		   string
-	polkakey	   string
+	secret         string
+	polkakey       string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -91,7 +92,7 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Password string `json:"password"`
-		Email string `json:"email"`
+		Email    string `json:"email"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -116,14 +117,13 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
 	respondWithJSON(w, 201, User{ID: usr.ID, CreatedAt: usr.CreatedAt, UpdatedAt: usr.UpdatedAt, Email: usr.Email, IsChirpyRed: usr.IsChirpyRed.Bool})
 
 }
 
 func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Body   string    `json:"body"`
+		Body string `json:"body"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -190,9 +190,9 @@ func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Password   	string    	`json:"password"`
-		Email 		string 		`json:"email"`
-		ExpiresInSeconds *int 	`json:"expires_in_seconds"`
+		Password         string `json:"password"`
+		Email            string `json:"email"`
+		ExpiresInSeconds *int   `json:"expires_in_seconds"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -218,7 +218,6 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	
 	token, err := auth.MakeJWT(usr.ID, cfg.secret, time.Hour)
 	if err != nil {
 		log.Printf("Error creating Token: %s", err)
@@ -233,7 +232,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rfToken, err := cfg.database.InsertTokenToDatabase(r.Context(), database.InsertTokenToDatabaseParams{
-		Token: refreshToken,
+		Token:  refreshToken,
 		UserID: usr.ID,
 	})
 	if err != nil {
@@ -242,15 +241,14 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
 	respondWithJSON(w, 200, User{
-		ID: usr.ID,
-		CreatedAt: usr.CreatedAt,
-		UpdatedAt: usr.UpdatedAt,
-		Email: usr.Email,
-		Token: token,
+		ID:           usr.ID,
+		CreatedAt:    usr.CreatedAt,
+		UpdatedAt:    usr.UpdatedAt,
+		Email:        usr.Email,
+		Token:        token,
 		RefreshToken: rfToken.Token,
-		IsChirpyRed: usr.IsChirpyRed.Bool,
+		IsChirpyRed:  usr.IsChirpyRed.Bool,
 	})
 }
 
@@ -275,7 +273,6 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 		return
 	}
-
 
 	type response struct {
 		Token string `json:"token"`
@@ -313,12 +310,12 @@ func (cfg *apiConfig) handlerPolkaWebhooks(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(401)
 		return
 	}
-	
+
 	type parameters struct {
-		Event   	string    	`json:"event"`
-		Data 		struct{
-			UserID	string 		`json:"user_id"`
-		}	`json:"data"`
+		Event string `json:"event"`
+		Data  struct {
+			UserID string `json:"user_id"`
+		} `json:"data"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -348,7 +345,7 @@ func (cfg *apiConfig) handlerPolkaWebhooks(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(404)
 		return
 	}
-	
+
 	_, err = cfg.database.UpdateUserRedStatus(r.Context(), usr.ID)
 	if err != nil {
 		log.Printf("Error updating User Data: %s", err)
@@ -373,10 +370,9 @@ func (cfg *apiConfig) handlerUpdateUserData(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-
 	type parameters struct {
-		NewPassword   	string    	`json:"password"`
-		Email 		string 		`json:"email"`
+		NewPassword string `json:"password"`
+		Email       string `json:"email"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -403,10 +399,10 @@ func (cfg *apiConfig) handlerUpdateUserData(w http.ResponseWriter, r *http.Reque
 	}
 
 	respondWithJSON(w, 200, User{
-		ID: newUserData.ID,
-		CreatedAt: newUserData.CreatedAt,
-		UpdatedAt: newUserData.UpdatedAt,
-		Email: newUserData.Email,
+		ID:          newUserData.ID,
+		CreatedAt:   newUserData.CreatedAt,
+		UpdatedAt:   newUserData.UpdatedAt,
+		Email:       newUserData.Email,
 		IsChirpyRed: newUserData.IsChirpyRed.Bool,
 	})
 
@@ -457,7 +453,7 @@ func (cfg *apiConfig) handlerDeleteChirpByID(w http.ResponseWriter, r *http.Requ
 		w.WriteHeader(404)
 		return
 	}
-	
+
 	w.WriteHeader(204)
 }
 
@@ -468,19 +464,74 @@ func HandlerFunction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.database.GetChirps(r.Context())
-	if err != nil {
-		log.Printf("Error gettting all Chirps: %s", err)
-		w.WriteHeader(500)
-		return
+	s := r.URL.Query().Get("author_id")
+	sortParam := r.URL.Query().Get("sort")
+	if sortParam == "" {
+		sortParam = "asc"
 	}
 
-	chirpSlice := []Chirp{}
-	for _, dbChirp := range chirps {
-		// convert dbChirp to your Chirp type and append to chirpSlice
-		chirpSlice = append(chirpSlice, Chirp{ID: dbChirp.ID, CreatedAt: dbChirp.CreatedAt, UpdatedAt: dbChirp.UpdatedAt, Body: dbChirp.Body, UserID: dbChirp.UserID})
+	if s == "" {
+		chirps, err := cfg.database.GetChirps(r.Context())
+		if err != nil {
+			log.Printf("Error gettting all Chirps: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		chirpSlice := []Chirp{}
+		for _, dbChirp := range chirps {
+			// convert dbChirp to your Chirp type and append to chirpSlice
+			chirpSlice = append(chirpSlice, Chirp{ID: dbChirp.ID, CreatedAt: dbChirp.CreatedAt, UpdatedAt: dbChirp.UpdatedAt, Body: dbChirp.Body, UserID: dbChirp.UserID})
+		}
+
+		// Sort chirps by created_at
+		if sortParam == "desc" {
+			sort.Slice(chirpSlice, func(i, j int) bool {
+				return chirpSlice[i].CreatedAt.After(chirpSlice[j].CreatedAt)
+			})
+		} else {
+			sort.Slice(chirpSlice, func(i, j int) bool {
+				return chirpSlice[i].CreatedAt.Before(chirpSlice[j].CreatedAt)
+			})
+		}
+
+		respondWithJSON(w, 200, chirpSlice)
+	} else {
+		usrID, err := uuid.Parse(s)
+		if err != nil {
+			log.Printf("Error getting UserID from URL: %s", err)
+			respondWithError(w, 400, "Invalid author_id")
+			return
+		}
+
+		allChirps, err := cfg.database.GetChirps(r.Context())
+		if err != nil {
+			log.Printf("Error getting all Chirps: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		chirpSlice := []Chirp{}
+		for _, dbChirp := range allChirps {
+			if dbChirp.UserID != usrID {
+				continue
+			}
+			chirpSlice = append(chirpSlice, Chirp{ID: dbChirp.ID, CreatedAt: dbChirp.CreatedAt, UpdatedAt: dbChirp.UpdatedAt, Body: dbChirp.Body, UserID: dbChirp.UserID})
+		}
+
+		// Sort chirps by created_at
+		if sortParam == "desc" {
+			sort.Slice(chirpSlice, func(i, j int) bool {
+				return chirpSlice[i].CreatedAt.After(chirpSlice[j].CreatedAt)
+			})
+		} else {
+			sort.Slice(chirpSlice, func(i, j int) bool {
+				return chirpSlice[i].CreatedAt.Before(chirpSlice[j].CreatedAt)
+			})
+		}
+
+		respondWithJSON(w, 200, chirpSlice)
 	}
-	respondWithJSON(w, 200, chirpSlice)
 }
 
 func (cfg *apiConfig) handlerGetChirpsByID(w http.ResponseWriter, r *http.Request) {
